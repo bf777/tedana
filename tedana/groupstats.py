@@ -18,6 +18,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
+import subprocess
+import site
 
 LGR = logging.getLogger("GENERAL")
 
@@ -109,6 +111,30 @@ def validate_tgs_path(tgs_path: Union[str, Path]) -> bool:
         return False
 
     return True
+
+
+def clone_install_tgs(tgs_path: Union[str, Path]) -> Path:
+    """Clone and install TGS files to a local directory.
+
+    Parameters
+    ----------
+    tgs_path : str or Path
+        Path to the local directory where TGS files will be installed.
+
+    Returns
+    -------
+    Path
+        Path to the installed TGS directory.
+    """
+    tgs_path = Path(tgs_path)
+    tgs_path.mkdir(parents=True, exist_ok=True)
+
+    # Clone the TGS repository
+    repo_url = f"https://github.com/{TGS_REPO_OWNER}/{TGS_REPO_NAME}.git"
+    subprocess.run(["git", "clone", repo_url, str(tgs_path)], check=True)
+    subprocess.run(["uv", "pip", "install", "-e", str(tgs_path) + "[dev]"], check=True)
+
+    return tgs_path
 
 
 def get_tgs_from_local(tgs_path: Union[str, Path]) -> Path:
@@ -354,6 +380,7 @@ def download_tgs(force: bool = False) -> Path:
     LGR.info(f"tedana_group_stats {latest_version} downloaded to {cache_dir}")
     return cache_dir
 
+
 def generate_tgs_launcher_script(out_dir: Union[str, Path]) -> Path:
     """Generate the TGS launcher script for a tedana output directory.
 
@@ -365,7 +392,7 @@ def generate_tgs_launcher_script(out_dir: Union[str, Path]) -> Path:
     Parameters
     ----------
     out_dir : str or Path
-        The tedana output directory.
+        The directory containing all tedana output directories.
     port : int, optional
         Default port for the local server. Default: 8000.
 
@@ -379,13 +406,40 @@ def generate_tgs_launcher_script(out_dir: Union[str, Path]) -> Path:
 
     # Cross-platform launcher script with embedded download logic
     script_content = (
-        '''#!/usr/bin/env python3
-"""
+    '''#!/usr/bin/env python3
+
+
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
+import platform
+import os
+import urllib.request
+import urllib.error
+import json
+import shutil
+import subprocess
+import importlib
+import site
+
+# tedana_group_stats GitHub repository information
+TGS_REPO_OWNER = "ME-ICA"
+TGS_REPO_NAME = "tedana_group_stats"
+TGS_GITHUB_API = (
+    f"https://api.github.com/repos/{TGS_REPO_OWNER}/{TGS_REPO_NAME}/releases/latest"
+)
+
+# Files to download from TGS releases
+TGS_FILES = ["aggregate.py", "discovery.py", "metrics.py", "report.py"]
+
+# Environment variable for local TGS path
+TGS_PATH_ENV_VAR = "TEDANA_TGS_PATH"
+
+# Bundled TGS path (relative to tedana package)
+TGS_BUNDLED_PATH = Path(__file__).parent / "resources" / "tedana_group_stats"
+
 
 def get_tgs_cache_dir():
     """Get platform-specific cache directory for TGS files."""
@@ -529,12 +583,41 @@ def setup_tgs(output_dir, force_download=False):
     else:
         print(f"[TGS] Installed {source_version} to {tgs_dir}")
     return tgs_dir
+    
+def clone_install_tgs(tgs_path: Union[str, Path]) -> Path:
+    """Clone and install TGS files to a local directory.
+
+    Parameters
+    ----------
+    tgs_path : str or Path
+        Path to the local directory where TGS files will be installed.
+
+    Returns
+    -------
+    Path
+        Path to the installed TGS directory.
+    """
+    tgs_path = Path(tgs_path)
+    tgs_path.mkdir(parents=True, exist_ok=True)
+    
+    if not tgs_path.exists() or not tgs_path.is_dir():
+        # Clone the TGS repository
+        repo_url = f"https://github.com/{TGS_REPO_OWNER}/{TGS_REPO_NAME}.git"
+        subprocess.run(["git", "clone", repo_url, str(tgs_path)], check=True)
+        subprocess.run(["uv", "pip", "install", "-e", str(tgs_path) + "[dev]"], check=True)
+
+    return tgs_path
+
+clone_install_tgs('/Users/brandon/Desktop/fMRI/tedana-test/tedana_dev/tedana/tedana/resources/tedana_group_stats')
+
+importlib.reload(site)
 
 from tedana_group_stats import __version__
 from tedana_group_stats.aggregate import DEFAULT_THRESHOLD, build_group_table
 from tedana_group_stats.discovery import discover_runs
 from tedana_group_stats.metrics import summarize_run
 from tedana_group_stats.report import write_report
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -543,13 +626,15 @@ def _build_parser() -> argparse.ArgumentParser:
             "Aggregate tedana outputs across a BIDS-derivatives tree into a group QC report."
         ),
     )
-    parser.add_argument("root", type=Path, help="BIDS-derivatives directory to scan recursively")
+    parser.add_argument("root", type=Path, default='''
+        + str('"' + str(out_dir) + '"')
+        + """, help="BIDS-derivatives directory to scan recursively")
     parser.add_argument(
         "-o",
         "--output",
-        type=Path,
-        default=Path("tedana_group_report.html"),
-        help="output HTML path (default: %(default)s)",
+        type=Path, default="""
+        + str('"' + str(out_dir) + '/' + "tgs_report.html" + '"')
+        + ''', help="output HTML path (default: %(default)s)",
     )
     parser.add_argument(
         "--offline",
@@ -557,9 +642,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="inline plotly.js for a fully standalone file",
     )
     parser.add_argument(
-        "--threshold",'''
-        + str(out_dir)
-        + """, type=float, default=DEFAULT_THRESHOLD, help="modified z-score cutoff for outlier flagging (default: %(default)s)",
+        "--threshold",
+        type=float, default=DEFAULT_THRESHOLD, help="modified z-score cutoff for outlier flagging (default: %(default)s)",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
@@ -585,7 +669,7 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-"""
+'''
     )
 
     script_path.write_text(script_content)
@@ -595,6 +679,7 @@ if __name__ == "__main__":
         script_path.chmod(script_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     return script_path
+
 
 def setup_tgs_report(out_dir: Union[str, Path]) -> Path:
     """Generate the TGS launcher script in a tedana output directory.
