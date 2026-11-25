@@ -787,8 +787,101 @@ def test_setup_tgs_report_env_var_not_required(tmp_path, monkeypatch):
     monkeypatch.setenv(groupstats.TGS_PATH_ENV_VAR, str(tmp_path / "somewhere"))
     assert groupstats.setup_tgs_report(tmp_path).exists()
 
+class TestLocalgroupstatsPath:
+    """Tests for local groupstats path support."""
 
-if __name__ == "__main__":
-    """Run the test directly."""
-    test_path = "/Users/brandon/Desktop/fMRI/tedana-test/tedana_input_dir"
-    test_generate_report(Path(test_path))
+    def _create_mock_tgs_files(self, tgs_dir):
+        """Create mock groupstats files in a directory.
+
+        Parameters
+        ----------
+        tgs_dir : Path
+            Directory to create mock groupstats files in.
+        """
+        tgs_dir.mkdir(parents=True, exist_ok=True)
+        for filename in groupstats.RICA_FILES:
+            (tgs_dir / filename).write_text(f"mock content for {filename}")
+
+    def test_validate_tgs_path_valid(self, tmp_path):
+        """Test that validation passes when all required files exist."""
+        tgs_dir = tmp_path / "groupstats"
+        self._create_mock_tgs_files(tgs_dir)
+
+        result = groupstats.validate_tgs_path(tgs_dir)
+
+        assert result is True
+
+    def test_validate_tgs_path_missing_files(self, tmp_path):
+        """Test that validation fails when files are missing."""
+        tgs_dir = tmp_path / "groupstats"
+        tgs_dir.mkdir()
+        # Only create one file, not all required files
+        (tgs_dir / groupstats.RICA_FILES[0]).write_text("mock content")
+
+        result = groupstats.validate_tgs_path(tgs_dir)
+
+        assert result is False
+
+    def test_validate_tgs_path_not_directory(self, tmp_path):
+        """Test that validation fails for non-existent or file paths."""
+        # Test non-existent path
+        non_existent = tmp_path / "does_not_exist"
+        result = groupstats.validate_tgs_path(non_existent)
+        assert result is False
+
+        # Test path that is a file, not a directory
+        file_path = tmp_path / "not_a_dir.txt"
+        file_path.write_text("I am a file")
+        result = groupstats.validate_tgs_path(file_path)
+        assert result is False
+
+    def test_get_tgs_from_local_valid(self, tmp_path):
+        """Test getting groupstats from a valid local path."""
+        tgs_dir = tmp_path / "groupstats"
+        self._create_mock_tgs_files(tgs_dir)
+
+        result = groupstats.get_tgs_from_local(tgs_dir)
+
+        assert result == tgs_dir
+        assert result.is_dir()
+
+    def test_get_tgs_from_local_invalid(self, tmp_path):
+        """Test that an error is raised for invalid paths."""
+        # Test non-existent path
+        non_existent = tmp_path / "does_not_exist"
+        with pytest.raises(ValueError, match="does not exist"):
+            groupstats.get_tgs_from_local(non_existent)
+
+        # Test path that is a file, not a directory
+        file_path = tmp_path / "not_a_dir.txt"
+        file_path.write_text("I am a file")
+        with pytest.raises(ValueError, match="is not a directory"):
+            groupstats.get_tgs_from_local(file_path)
+
+        # Test directory missing required files
+        incomplete_dir = tmp_path / "incomplete"
+        incomplete_dir.mkdir()
+        (incomplete_dir / groupstats.RICA_FILES[0]).write_text("mock content")
+        with pytest.raises(ValueError, match="missing required files"):
+            groupstats.get_tgs_from_local(incomplete_dir)
+
+    def test_setup_tgs_report_creates_launcher(self, tmp_path):
+        """Test that setup_tgs_report creates launcher script.
+
+        Note: The launcher script handles environment variable detection
+        and groupstats file setup at runtime, not during tedana execution.
+        """
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        launcher_path = groupstats.setup_tgs_report(output_dir)
+
+        # Verify launcher script was created
+        assert launcher_path is not None
+        assert launcher_path.exists()
+        assert launcher_path.name == "open_tgs_report.py"
+
+        # Verify launcher script contains env var detection logic
+        content = launcher_path.read_text()
+        assert "TEDANA_TGS_PATH" in content
